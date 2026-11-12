@@ -1,0 +1,32 @@
+# Flutter / Dart
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/local.properties
+**/.gradle/
+**/.idea/
+**/.vscode/
+**/*.iml
+**/.DS_Store
+**/Thumbs.db
+**/Desktop.ini
+
+# Python
+**/__pycache__/
+**/.venv/
+**/dist/
+**/.tmp/
+**/.pyinstaller/
+*.py[cod]
+
+# Local Android signing/configuration files
+**/key.properties
+**/*.jks
+**/*.keystore
+**/google-services.json
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12

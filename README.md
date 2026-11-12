@@ -1,6 +1,6 @@
 # Phone-to-PC Audio
 
-An open-source Android-to-Windows audio streamer. The Android app captures eligible playback on Android 10 or newer and sends raw PCM audio over WebSocket. The Windows receiver plays it through a selected output device.
+An open-source Android-to-Windows audio streamer. The Android app captures eligible playback on Android 10 or newer and sends raw PCM audio over WebSocket. The Windows receiver plays it through a selected output device and provides an independent volume slider for the phone stream.
 
 ## Components
 
@@ -11,7 +11,7 @@ An open-source Android-to-Windows audio streamer. The Android app captures eligi
 ## Quick start
 
 1. Build the Windows receiver by following [docs/SETUP.md](docs/SETUP.md). The portable app is generated under `windows_receiver/dist/` and is not committed to this source repository.
-2. Open the receiver, choose an audio output, and start listening.
+2. Open the receiver, choose an audio output, set the stream volume, and start listening.
 3. Build and install the Android app, following the same setup guide.
 4. Put the phone and PC on the same trusted Wi-Fi. In the phone app, enter the PC address shown by the receiver and port `8765`. For USB, configure `adb reverse` and use `127.0.0.1`.
 

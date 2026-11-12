@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 import sounddevice as sd
 from websockets.asyncio.server import serve
 
-from audio_receiver import FRAME_BYTES, RATE, receive_audio
+from audio_receiver import FRAME_BYTES, VolumeControl, receive_audio
 
 
 class ReceiverApp:
@@ -35,6 +35,9 @@ class ReceiverApp:
         self.status_var = tk.StringVar(value="Stopped")
         self.client_var = tk.StringVar(value="Waiting for phone")
         self.bytes_var = tk.StringVar(value="0 B received")
+        self.volume_control = VolumeControl()
+        self.volume_var = tk.DoubleVar(value=100.0)
+        self.volume_text = tk.StringVar(value="100%")
 
         self._build_ui()
         self._load_output_devices()
@@ -70,6 +73,19 @@ class ReceiverApp:
 
         self.address_label = ttk.Label(connection, text="PC addresses: checking…", justify="left")
         self.address_label.grid(row=1, column=0, columnspan=4, sticky="w", pady=(14, 0))
+
+        volume = ttk.Frame(connection)
+        volume.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        ttk.Label(volume, text="Receiver volume").pack(side="left")
+        self.volume_scale = ttk.Scale(
+            volume,
+            from_=0,
+            to=100,
+            variable=self.volume_var,
+            command=self._on_volume_changed,
+        )
+        self.volume_scale.pack(side="left", fill="x", expand=True, padx=(12, 10))
+        ttk.Label(volume, textvariable=self.volume_text, width=5, anchor="e").pack(side="left")
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=16)
@@ -121,6 +137,11 @@ class ReceiverApp:
         if self.output_var.get() not in devices:
             self.output_var.set("System default")
         self._log(f"Found {len(devices) - 1} audio output device(s).")
+
+    def _on_volume_changed(self, value):
+        percent = round(float(value))
+        self.volume_control.set_percent(percent)
+        self.volume_text.set(f"{percent}%")
 
     def _refresh_addresses(self):
         addresses = set()
@@ -188,6 +209,7 @@ class ReceiverApp:
         handler = lambda websocket: receive_audio(
             websocket,
             output_device=output_device,
+            volume_control=self.volume_control,
             on_event=on_event,
         )
         try:

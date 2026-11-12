@@ -33,7 +33,7 @@ python -m py_compile audio_receiver.py receiver.py receiver_app.py
 python receiver_app.py
 ```
 
-Build the portable Windows package with `.\build_app.ps1` in PowerShell.
+Build the portable Windows package with `.\build_app.ps1` in PowerShell. To create the Windows installer, install Inno Setup 6 and run `..\build_installer.ps1` from the receiver directory.
 
 ## Pull requests
 

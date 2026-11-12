@@ -12,7 +12,9 @@ python -m pip install -r requirements-app.txt
 .\build_app.ps1
 ```
 
-The portable app is generated under `windows_receiver\dist\PhoneToPcReceiver\`. The build script removes its temporary build/cache files after a successful package and keeps the runnable app folder. Keep the entire folder together when copying it to another PC. Open `PhoneToPcReceiver.exe`, choose the PC audio output, and press **Start receiver**. If Windows Firewall asks, allow access on the **Private network** used by the phone. Do not expose port `8765` to public networks.
+The portable app is generated under `windows_receiver\dist\PhoneToPcReceiver\`. The build script removes its temporary build/cache files after a successful package and keeps the runnable app folder. Keep the entire folder together when copying it to another PC. Open `PhoneToPcReceiver.exe`, choose the PC audio output, adjust **Receiver volume**, and press **Start receiver**. This slider controls only the phone stream, not Windows system volume. If Windows Firewall asks, allow access on the **Private network** used by the phone. Do not expose port `8765` to public networks.
+
+To create a standard Windows installer, install Inno Setup 6, build the portable app, then run `windows_receiver\build_installer.ps1`. The setup program is written to `windows_receiver\dist\installer\PhoneToPcAudio-Setup-1.0.0.exe`. It installs per-user, creates a Start menu shortcut and offers an optional desktop shortcut. It does not add firewall rules; allow the app on the Private network if Windows asks.
 
 To run the desktop app directly from Python instead of packaging it, run `python receiver_app.py`. To use the command-line receiver, run `python receiver.py`; it plays through the system-default output. Both versions use the same PCM/WebSocket receive code.
 

@@ -10,7 +10,7 @@ The phone sends binary WebSocket messages over TCP port `8765`. Wi-Fi uses the P
 
 ## Windows
 
-`receiver_app.py` provides the desktop interface. It runs the WebSocket server on a background asyncio loop so the window remains responsive. `receiver.py` provides a command-line entry point. Both use `audio_receiver.py` to validate and play frames through `sounddevice`.
+`receiver_app.py` provides the desktop interface, including a receiver-volume slider. It runs the WebSocket server on a background asyncio loop so the window remains responsive. `receiver.py` provides a command-line entry point. Both use `audio_receiver.py` to validate and play frames through `sounddevice`. The desktop slider scales the received PCM samples before playback and does not change Windows system volume.
 
 ## Audio format
 

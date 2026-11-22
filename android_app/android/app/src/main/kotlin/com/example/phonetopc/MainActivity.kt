@@ -16,6 +16,15 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "phonetopc/capture").setMethodCallHandler { call, result ->
             when (call.method) {
+                "getDeviceName" -> {
+                    val manufacturer = android.os.Build.MANUFACTURER.orEmpty().trim()
+                    val model = android.os.Build.MODEL.orEmpty().trim()
+                    val deviceName = listOf(manufacturer, model)
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                        .joinToString(" ")
+                    result.success(deviceName.ifBlank { "Android device" })
+                }
                 "startCapture" -> {
                     if (pending != null) { result.error("BUSY", "Capture request already active", null); return@setMethodCallHandler }
                     pending = result
@@ -24,6 +33,43 @@ class MainActivity : FlutterActivity() {
                     } else requestCaptureConsent()
                 }
                 "stopCapture" -> { stopService(Intent(this, CaptureService::class.java)); result.success(null) }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(engine.dartExecutor.binaryMessenger, "phonetopc/settings").setMethodCallHandler { call, result ->
+            val preferences = getSharedPreferences("phone_to_pc_settings", MODE_PRIVATE)
+            when (call.method) {
+                "getThemeMode" -> result.success(preferences.getString("theme_mode", "system"))
+                "setThemeMode" -> {
+                    val mode = call.argument<String>("themeMode")
+                    if (mode !in setOf("system", "light", "dark")) {
+                        result.error("INVALID_THEME", "Theme must be system, light, or dark", null)
+                    } else {
+                        preferences.edit().putString("theme_mode", mode).apply()
+                        result.success(null)
+                    }
+                }
+                "getConnectionSettings" -> result.success(
+                    mapOf(
+                        "host" to preferences.getString("pc_host", ""),
+                        "port" to preferences.getString("pc_port", "8765"),
+                        "mode" to preferences.getString("connection_mode", "wifi"),
+                        "wifiHost" to preferences.getString("wifi_host", ""),
+                    ),
+                )
+                "setConnectionSettings" -> {
+                    val host = call.argument<String>("host") ?: ""
+                    val port = call.argument<String>("port") ?: "8765"
+                    val mode = call.argument<String>("mode") ?: "wifi"
+                    val wifiHost = call.argument<String>("wifiHost") ?: ""
+                    preferences.edit()
+                        .putString("pc_host", host)
+                        .putString("pc_port", port)
+                        .putString("connection_mode", mode)
+                        .putString("wifi_host", wifiHost)
+                        .apply()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

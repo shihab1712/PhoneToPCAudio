@@ -1,3 +1,8 @@
+param(
+    [ValidatePattern('^[A-Za-z0-9_-]+$')]
+    [string]$AppName = 'PhoneToPcReceiver'
+)
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
@@ -17,7 +22,7 @@ Push-Location $projectRoot
 $buildSucceeded = $false
 try {
     & $python -m PyInstaller --noconfirm --clean --windowed `
-        --name PhoneToPcReceiver --collect-all _sounddevice_data receiver_app.py
+        --name $AppName --specpath $tempPath --collect-all _sounddevice_data receiver_app.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller exited with code $LASTEXITCODE"
     }
@@ -47,5 +52,5 @@ try {
     }
 }
 
-Write-Host "Windows app created at: $(Join-Path $projectRoot 'dist\PhoneToPcReceiver\PhoneToPcReceiver.exe')"
+Write-Host "Windows app created at: $(Join-Path $projectRoot "dist\$AppName\$AppName.exe")"
 Write-Host 'Temporary build, cache, and scratch files were removed; the runnable app folder was kept.'

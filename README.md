@@ -11,9 +11,9 @@ An open-source Android-to-Windows audio streamer. The Android app captures eligi
 ## Quick start
 
 1. Build the Windows receiver by following [docs/SETUP.md](docs/SETUP.md). The portable app is generated under `windows_receiver/dist/` and is not committed to this source repository.
-2. Open the receiver, choose an audio output, set the stream volume, and start listening.
+2. Open the receiver, choose an audio output, and set the stream volume. You can change the output while the phone is connected. Choose its Wi-Fi or USB section to start listening; the USB button configures ADB forwarding automatically.
 3. Build and install the Android app, following the same setup guide.
-4. Put the phone and PC on the same trusted Wi-Fi. In the phone app, enter the PC address shown by the receiver and port `8765`. For USB, configure `adb reverse` and use `127.0.0.1`.
+4. For Wi-Fi, put the phone and PC on the same trusted network and enter the PC address shown by the receiver in the phone app. For USB, connect and authorize the phone, then use `127.0.0.1` in the phone app.
 
 The first capture session requires Android’s playback-capture approval. Some apps block capture, and the phone app must remain open while streaming.
 

@@ -23,6 +23,8 @@ class CaptureService : Service() {
     companion object {
         @Volatile var eventSink: io.flutter.plugin.common.EventChannel.EventSink? = null
         private const val TAG = "PhoneToPcCapture"
+        // 10 ms at 48 kHz, stereo, signed 16-bit PCM.
+        private const val FRAME_BYTES = 1_920
     }
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var running = false
@@ -70,7 +72,7 @@ class CaptureService : Service() {
             val rate = 48_000
             val mask = AudioFormat.CHANNEL_IN_STEREO
             val format = AudioFormat.ENCODING_PCM_16BIT
-            val size = AudioRecord.getMinBufferSize(rate, mask, format).coerceAtLeast(3_840) * 2
+            val size = AudioRecord.getMinBufferSize(rate, mask, format).coerceAtLeast(FRAME_BYTES) * 2
             val config = AudioPlaybackCaptureConfiguration.Builder(projection!!)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -83,7 +85,7 @@ class CaptureService : Service() {
             record = activeRecord
             audioRecord = activeRecord
             activeRecord.startRecording()
-            val buffer = ByteArray(3_840)
+            val buffer = ByteArray(FRAME_BYTES)
             while (running) {
                 val count = activeRecord.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                 if (count > 0) sendAudio(if (count == buffer.size) buffer.copyOf() else buffer.copyOf(count))

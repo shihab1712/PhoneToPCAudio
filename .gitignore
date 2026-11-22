@@ -19,6 +19,7 @@
 **/.tmp/
 **/.pyinstaller/
 *.py[cod]
+/Installed/
 
 # Local Android signing/configuration files
 **/key.properties

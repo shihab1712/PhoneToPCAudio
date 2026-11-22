@@ -1,13 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
 $portableAppFolder = 'dist\PhoneToPcReceiver'
-$volumeAppFolder = 'dist\PhoneToPcReceiver-volume'
-if (Test-Path -LiteralPath (Join-Path $projectRoot "$volumeAppFolder\PhoneToPcReceiver.exe")) {
-    $portableAppFolder = $volumeAppFolder
-}
 $portableApp = Join-Path $projectRoot "$portableAppFolder\PhoneToPcReceiver.exe"
 $installerScript = Join-Path $projectRoot 'PhoneToPcAudio.iss'
 $outputInstaller = Join-Path $projectRoot 'dist\installer\PhoneToPcAudio-Setup-1.0.0.exe'
+$tempPath = Join-Path $projectRoot '.tmp-installer'
 
 if (-not (Test-Path -LiteralPath $portableApp)) {
     throw "Portable app not found. Run .\build_app.ps1 first: $portableApp"
@@ -16,7 +13,13 @@ if (-not (Test-Path -LiteralPath $installerScript)) {
     throw "Inno Setup definition not found: $installerScript"
 }
 
-$compiler = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+$compiler = $env:INNO_SETUP_COMPILER
+if ($compiler -and -not (Test-Path -LiteralPath $compiler)) {
+    throw "Inno Setup compiler not found at INNO_SETUP_COMPILER: $compiler"
+}
+if (-not $compiler) {
+    $compiler = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+}
 if (-not $compiler) {
     $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
     $candidates = @(
@@ -30,6 +33,11 @@ if (-not $compiler) {
 }
 
 Push-Location $projectRoot
+$previousTemp = $env:TEMP
+$previousTmp = $env:TMP
+New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
+$env:TEMP = $tempPath
+$env:TMP = $tempPath
 try {
     & $compiler '/Qp' "/DAppFilesDir=$portableAppFolder" $installerScript
     if ($LASTEXITCODE -ne 0) {
@@ -37,6 +45,15 @@ try {
     }
 } finally {
     Pop-Location
+    $env:TEMP = $previousTemp
+    $env:TMP = $previousTmp
+    if (Test-Path -LiteralPath $tempPath) {
+        $resolvedTemp = (Resolve-Path -LiteralPath $tempPath).Path.TrimEnd('\')
+        $projectPrefix = $projectRoot.TrimEnd('\') + '\'
+        if ($resolvedTemp.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+        }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $outputInstaller)) {

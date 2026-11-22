@@ -7,6 +7,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  dynamic_color: ^2.1.0
   material_ui: ^1.11.0
   web_socket_channel: ^3.0.3
 dev_dependencies:

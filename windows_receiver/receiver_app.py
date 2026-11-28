@@ -3,14 +3,19 @@
 import asyncio
 import ctypes
 import json
+from io import BytesIO
 import math
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
 import threading
+import time
 import tkinter as tk
+import urllib.request
+import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -18,6 +23,18 @@ import sounddevice as sd
 from websockets.asyncio.server import serve
 
 from audio_receiver import AudioBufferControl, FRAME_BYTES, OutputDeviceControl, VolumeControl, receive_audio
+
+
+APP_VERSION = "1.1.0"
+LATEST_RELEASE_API = "https://api.github.com/repos/shihab1712/PhoneToPC/releases/latest"
+
+
+def _version_tuple(value):
+    match = re.match(r"v?(\d+(?:\.\d+){0,3})", str(value).strip(), re.IGNORECASE)
+    if not match:
+        return ()
+    parts = [int(part) for part in match.group(1).split(".")]
+    return tuple((parts + [0, 0, 0, 0])[:4])
 
 
 class FlowCard(tk.Canvas):
@@ -224,17 +241,32 @@ class ReceiverApp:
         ("usb", "USB stream"),
         ("shortcuts", "Global volume shortcuts"),
         ("activity", "Activity"),
+        ("video", "Video stream"),
     )
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Phone to PC Audio")
+        self.root.title("PhoneToPC")
         self.root.geometry("920x720")
         self.root.minsize(860, 680)
         self.style = ttk.Style(self.root)
         self._apply_theme()
 
         self.events = queue.SimpleQueue()
+        self.video_frame_lock = threading.Lock()
+        self.pending_video_frame = None
+        self.connection_lock = threading.Lock()
+        self.active_websocket = None
+        self.display_power_lock = threading.Lock()
+        self.phone_display_off = False
+        self.display_power_desired = False
+        self.video_stream_active = False
+        self.display_power_serial = None
+        self.phone_screen_size = None
+        self.latest_video_jpeg = None
+        self.fullscreen_video_window = None
+        self.fullscreen_video_label = None
+        self.fullscreen_video_photo = None
         self.settings_path = Path(os.environ.get("APPDATA", Path.home())) / "PhoneToPcAudio" / "settings.json"
         self.hotkey_config = {action: settings.copy() for action, settings in self.DEFAULT_HOTKEYS.items()}
         self.dashboard_order = [key for key, _ in self.DASHBOARD_SECTIONS]
@@ -255,6 +287,12 @@ class ReceiverApp:
         self.closing = False
         self.client = None
         self.client_device_name = None
+        self.video_label = None
+        self.video_placeholder = None
+        self.video_photo = None
+        self.video_source_size = None
+        self.video_gesture_points = None
+        self.video_gesture_started_at = 0.0
         self.transport_device_name = None
         self.active_transport = None
         self.adb_path = None
@@ -278,12 +316,17 @@ class ReceiverApp:
         self.output_device_control = OutputDeviceControl()
         self.volume_var = tk.DoubleVar(value=100.0)
         self.volume_text = tk.StringVar(value="100%")
+        self.remote_control_var = tk.BooleanVar(value=False)
+        self.phone_mute_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._load_output_devices()
         self._refresh_addresses()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<KeyPress-f>", self._open_video_fullscreen, add="+")
+        self.root.bind("<KeyPress-F>", self._open_video_fullscreen, add="+")
         self.root.after(100, self._process_events)
+        self.root.after(16, self._process_pending_video_frame)
         self._start_hotkey_listener()
 
     def _apply_theme(self):
@@ -322,6 +365,8 @@ class ReceiverApp:
         self.style.configure("Muted.TLabel", background=c["window"], foreground=c["muted"], font=("Segoe UI", 9))
         self.style.configure("Card.TLabel", background=c["container"], foreground=c["text"], font=("Segoe UI", 9))
         self.style.configure("CardMuted.TLabel", background=c["container"], foreground=c["muted"], font=("Segoe UI", 9))
+        self.style.configure("Card.TCheckbutton", background=c["container"], foreground=c["text"], font=("Segoe UI", 9))
+        self.style.map("Card.TCheckbutton", background=[("active", c["container"])], foreground=[("disabled", c["muted"])])
         self.style.configure("Title.TLabel", background=c["window"], foreground=c["text"], font=("Segoe UI Semibold", 21))
         self.style.configure("Section.TLabel", background=c["container"], foreground=c["text"], font=("Segoe UI Semibold", 12))
         self.style.configure("Primary.TButton", font=("Segoe UI Semibold", 9), foreground=c["on_primary"], background=c["primary"], padding=(14, 7), borderwidth=0)
@@ -343,7 +388,7 @@ class ReceiverApp:
         header.pack(fill="x")
         header_text = ttk.Frame(header, style="App.TFrame")
         header_text.pack(side="left", fill="x", expand=True)
-        ttk.Label(header_text, text="Phone to PC Audio", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(header_text, text="PhoneToPC", style="Title.TLabel").pack(anchor="w")
         self.dashboard_hint = ttk.Label(
             header_text,
             text="Stream Android audio over Wi-Fi or USB.",
@@ -357,14 +402,48 @@ class ReceiverApp:
             command=self._toggle_dashboard_edit,
         )
         self.customize_button.pack(side="right", padx=(12, 0), pady=(2, 8))
+        self.update_button = ttk.Button(
+            header,
+            text="Check for updates",
+            style="Secondary.TButton",
+            command=self._check_for_updates,
+        )
+        self.update_button.pack(side="right", padx=(8, 0), pady=(2, 8))
         self.add_section_button = ttk.Menubutton(
             header, text="Add section", style="Secondary.TButton"
         )
         self.add_section_menu = tk.Menu(self.add_section_button, tearoff=False)
         self.add_section_button.configure(menu=self.add_section_menu)
 
-        self.dashboard_frame = ttk.Frame(outer, style="App.TFrame")
-        self.dashboard_frame.pack(fill="both", expand=True)
+        dashboard_holder = ttk.Frame(outer, style="App.TFrame")
+        dashboard_holder.pack(fill="both", expand=True)
+        self.dashboard_canvas = tk.Canvas(
+            dashboard_holder,
+            background=c["window"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.dashboard_canvas.pack(side="left", fill="both", expand=True)
+        self.dashboard_scrollbar = ttk.Scrollbar(
+            dashboard_holder,
+            orient="vertical",
+            command=self.dashboard_canvas.yview,
+        )
+        self.dashboard_scrollbar.pack(side="right", fill="y")
+        self.dashboard_canvas.configure(yscrollcommand=self.dashboard_scrollbar.set)
+        self.dashboard_frame = ttk.Frame(self.dashboard_canvas, style="App.TFrame")
+        self._dashboard_window = self.dashboard_canvas.create_window(
+            (0, 0), window=self.dashboard_frame, anchor="nw"
+        )
+        self.dashboard_frame.bind("<Configure>", self._update_dashboard_scrollregion)
+        self.dashboard_canvas.bind(
+            "<Configure>",
+            lambda event: self.dashboard_canvas.itemconfigure(
+                self._dashboard_window, width=event.width
+            ),
+        )
+        self.dashboard_canvas.bind("<Enter>", self._enable_dashboard_wheel)
+        self.dashboard_canvas.bind("<Leave>", self._disable_dashboard_wheel)
         self.dashboard_frame.grid_columnconfigure((0, 1), weight=1, uniform="dashboard")
 
         settings_card = FlowCard(self.dashboard_frame, colors=c, padding=10)
@@ -507,6 +586,13 @@ class ReceiverApp:
         actions.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
         self.refresh_button = ttk.Button(actions, text="Refresh audio devices", command=self._load_output_devices, style="Secondary.TButton")
         self.refresh_button.pack(side="left")
+        ttk.Checkbutton(
+            actions,
+            text="Mute phone media while connected (restore on disconnect)",
+            variable=self.phone_mute_var,
+            command=self._on_phone_mute_toggle,
+            style="Card.TCheckbutton",
+        ).pack(side="left", padx=(10, 0))
 
         status_card = FlowCard(self.dashboard_frame, colors=c, padding=10)
         status = status_card.content
@@ -541,6 +627,64 @@ class ReceiverApp:
         self.log_scrollbar.pack(side="right", fill="y")
         self.log_text.configure(yscrollcommand=self.log_scrollbar.set)
 
+        video_card = FlowCard(self.dashboard_frame, colors=c, padding=10)
+        video = video_card.content
+        ttk.Label(video, text="Video stream", style="Section.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            video,
+            text="Choose Audio + video on your phone to share its screen.",
+            style="CardMuted.TLabel",
+            wraplength=700,
+        ).pack(anchor="w", pady=(0, 6))
+        self.video_placeholder = tk.Label(
+            video,
+            text="Waiting for phone screen",
+            height=6,
+            anchor="center",
+            justify="center",
+            wraplength=700,
+            background=c["surface"],
+            foreground=c["muted"],
+            highlightthickness=1,
+            highlightbackground=c["outline"],
+        )
+        self.video_placeholder.pack(fill="x", expand=True)
+        self.video_label = tk.Label(
+            video,
+            anchor="center",
+            background=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["outline"],
+        )
+        self.video_label.bind("<ButtonPress-1>", self._on_video_mouse_press)
+        self.video_label.bind("<B1-Motion>", self._on_video_mouse_motion)
+        self.video_label.bind("<ButtonRelease-1>", self._on_video_mouse_release)
+        self.fullscreen_video_button = ttk.Button(
+            video,
+            text="Fullscreen (F)",
+            command=self._open_video_fullscreen,
+            style="Secondary.TButton",
+            state="disabled",
+        )
+        self.fullscreen_video_button.pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(
+            video,
+            text="Allow mouse control",
+            variable=self.remote_control_var,
+            command=self._on_remote_control_toggle,
+            style="Card.TCheckbutton",
+        ).pack(anchor="w", pady=(6, 0))
+        self.display_power_var = tk.BooleanVar(value=False)
+        self.display_power_check = ttk.Checkbutton(
+            video,
+            text="Turn off phone display while mirroring (Android 15+; USB debugging required)",
+            variable=self.display_power_var,
+            command=self._on_display_power_toggle,
+            style="Card.TCheckbutton",
+            state="disabled",
+        )
+        self.display_power_check.pack(anchor="w", pady=(4, 0))
+
         self.dashboard_cards = {
             "settings": settings_card,
             "status": status_card,
@@ -548,6 +692,7 @@ class ReceiverApp:
             "usb": usb_card,
             "shortcuts": shortcuts_card,
             "activity": log_card,
+            "video": video_card,
         }
         self.drag_placeholder = ttk.Frame(self.dashboard_frame, style="Card.TFrame")
         self.drag_placeholder.grid_propagate(False)
@@ -568,6 +713,31 @@ class ReceiverApp:
         self.flow_cards = list(self.dashboard_cards.values())
         for card in self.flow_cards:
             card.enable_hover()
+
+    def _update_dashboard_scrollregion(self, _event=None):
+        bounds = self.dashboard_canvas.bbox("all")
+        self.dashboard_canvas.configure(scrollregion=bounds or (0, 0, 0, 0))
+
+    def _enable_dashboard_wheel(self, _event=None):
+        self.root.bind_all("<MouseWheel>", self._on_dashboard_mousewheel)
+        self.root.bind_all("<Button-4>", self._on_dashboard_mousewheel)
+        self.root.bind_all("<Button-5>", self._on_dashboard_mousewheel)
+
+    def _disable_dashboard_wheel(self, _event=None):
+        self.root.unbind_all("<MouseWheel>")
+        self.root.unbind_all("<Button-4>")
+        self.root.unbind_all("<Button-5>")
+
+    def _on_dashboard_mousewheel(self, event):
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -int(event.delta / 120) if event.delta else 0
+        if delta:
+            self.dashboard_canvas.yview_scroll(delta * 3, "units")
+        return "break"
 
     def _load_hotkey_settings(self):
         try:
@@ -678,7 +848,9 @@ class ReceiverApp:
 
     def _bind_card_drag_children(self, widget, key):
         for child in widget.winfo_children():
-            if not isinstance(child, (tk.Button, tk.Entry, tk.Scale, ttk.Button, ttk.Entry, ttk.Combobox, ttk.Scale, ttk.Scrollbar)):
+            if child in (self.video_label, self.video_placeholder):
+                continue
+            if not isinstance(child, (tk.Button, tk.Entry, tk.Scale, ttk.Button, ttk.Checkbutton, ttk.Entry, ttk.Combobox, ttk.Scale, ttk.Scrollbar)):
                 child.bind("<ButtonPress-1>", lambda event, section=key: self._start_card_drag(event, section), add="+")
                 child.bind("<B1-Motion>", self._move_card_drag, add="+")
                 child.bind("<ButtonRelease-1>", self._finish_card_drag, add="+")
@@ -1155,6 +1327,19 @@ class ReceiverApp:
 
     async def _serve(self, port, output_device, transport):
         def on_event(name, value):
+            if name == "websocket":
+                with self.connection_lock:
+                    self.active_websocket = value
+                return
+            if name == "video_frame":
+                with self.video_frame_lock:
+                    self.pending_video_frame = value
+                return
+            if name == "disconnected":
+                with self.video_frame_lock:
+                    self.pending_video_frame = None
+                with self.connection_lock:
+                    self.active_websocket = None
             self.events.put((name, value))
 
         handler = lambda websocket: receive_audio(
@@ -1171,7 +1356,8 @@ class ReceiverApp:
                 handler,
                 "0.0.0.0",
                 port,
-                max_size=FRAME_BYTES * 8,
+                # JPEG screen frames are much larger than 10 ms PCM packets.
+                max_size=4 * 1024 * 1024,
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=2,
@@ -1238,12 +1424,24 @@ class ReceiverApp:
                 self.latest_rtt_ms = None
                 self._update_latency_display()
                 self._log(f"Phone connected: {value}")
+                if self.phone_mute_var.get():
+                    self._send_phone_mute(True)
             elif name == "device_name":
                 self.client_device_name = value
                 self.transport_device_name = value
                 self._update_client_display()
                 self._log(f"Connected device: {value}")
             elif name == "disconnected":
+                self._restore_phone_display()
+                self.video_stream_active = False
+                self.display_power_check.configure(state="disabled")
+                self.fullscreen_video_button.configure(state="disabled")
+                self.latest_video_jpeg = None
+                self._close_video_fullscreen()
+                self.video_photo = None
+                self.video_label.configure(image="")
+                self.video_label.pack_forget()
+                self.video_placeholder.pack(fill="x", expand=True)
                 self.client = None
                 self.client_device_name = None
                 self._update_client_display()
@@ -1264,6 +1462,53 @@ class ReceiverApp:
                 self._log(str(value))
             elif name == "warning":
                 self._log(str(value))
+            elif name == "control_error":
+                self._log(str(value))
+            elif name == "update_check_result":
+                self.update_button.configure(state="normal", text="Check for updates")
+                status, version, release_url, error = value
+                if status == "available":
+                    if messagebox.askyesno(
+                        "Update available",
+                        f"PhoneToPC {version} is available. Open the GitHub release page?",
+                        parent=self.root,
+                    ):
+                        webbrowser.open(release_url)
+                elif status == "current":
+                    messagebox.showinfo(
+                        "No updates available",
+                        f"You are using the latest version of PhoneToPC ({APP_VERSION}).",
+                        parent=self.root,
+                    )
+                else:
+                    messagebox.showerror(
+                        "Update check failed",
+                        f"Could not check GitHub for updates.\n\n{error}",
+                        parent=self.root,
+                    )
+            elif name == "phone_mute_result":
+                if value == "muted":
+                    self._log("Phone media volume muted.")
+                elif value == "unmuted":
+                    self._log("Phone media volume restored.")
+                else:
+                    self._log("Phone could not change its media volume.")
+            elif name == "display_power_result":
+                desired, error = value
+                if error:
+                    self.display_power_var.set(self.phone_display_off)
+                    self.display_power_desired = self.phone_display_off
+                    self._log(f"Could not change phone display power: {error}")
+                    messagebox.showerror("Phone display", error, parent=self.root)
+                else:
+                    self.phone_display_off = desired
+                    self._log(
+                        "Phone display turned off; mirroring continues and mouse input uses USB debugging."
+                        if desired else "Phone display turned on."
+                    )
+                self.display_power_check.configure(
+                    state="normal" if self.video_stream_active else "disabled"
+                )
             elif name == "output_changed":
                 self._log("Audio output switched.")
             elif name == "output_switch_error":
@@ -1281,6 +1526,9 @@ class ReceiverApp:
                     self.wifi_status_var.set("Could not start")
                 messagebox.showerror("Receiver error", str(value), parent=self.root)
             elif name == "stopped":
+                self._restore_phone_display()
+                self.video_stream_active = False
+                self.display_power_check.configure(state="disabled")
                 self.client = None
                 self.client_device_name = None
                 self.transport_device_name = None
@@ -1302,6 +1550,15 @@ class ReceiverApp:
                     self.root.destroy()
         self.root.after(100, self._process_events)
 
+    def _process_pending_video_frame(self):
+        with self.video_frame_lock:
+            latest_video_frame = self.pending_video_frame
+            self.pending_video_frame = None
+        if latest_video_frame is not None:
+            self._show_video_frame(latest_video_frame)
+        if not self.closing:
+            self.root.after(16, self._process_pending_video_frame)
+
     def _update_client_display(self):
         if self.client is None:
             self.client_var.set("Waiting for phone")
@@ -1312,6 +1569,387 @@ class ReceiverApp:
         else:
             self.client_var.set(address)
 
+    def _show_video_frame(self, jpeg):
+        try:
+            from PIL import Image, ImageTk
+
+            with Image.open(BytesIO(jpeg)) as image:
+                self.video_source_size = image.size
+                self.latest_video_jpeg = jpeg
+                main_preview = image.copy()
+                main_preview.thumbnail((520, 300), Image.Resampling.LANCZOS)
+                fullscreen_preview = image.copy()
+            self.video_photo = ImageTk.PhotoImage(main_preview, master=self.video_label)
+            self.video_placeholder.pack_forget()
+            self.video_label.configure(image=self.video_photo)
+            if not self.video_label.winfo_manager():
+                self.video_label.pack(fill="both", expand=True)
+            if self.fullscreen_video_label is not None:
+                width = max(1, self.fullscreen_video_label.winfo_width() - 16)
+                height = max(1, self.fullscreen_video_label.winfo_height() - 16)
+                if width <= 1 or height <= 1:
+                    width = self.root.winfo_screenwidth() - 16
+                    height = self.root.winfo_screenheight() - 64
+                scale = min(
+                    width / fullscreen_preview.width,
+                    height / fullscreen_preview.height,
+                )
+                target_size = (
+                    max(1, round(fullscreen_preview.width * scale)),
+                    max(1, round(fullscreen_preview.height * scale)),
+                )
+                fullscreen_preview = fullscreen_preview.resize(
+                    target_size, Image.Resampling.LANCZOS
+                )
+                self.fullscreen_video_photo = ImageTk.PhotoImage(
+                    fullscreen_preview, master=self.fullscreen_video_label
+                )
+                self.fullscreen_video_label.configure(image=self.fullscreen_video_photo)
+            self.fullscreen_video_button.configure(state="normal")
+            self.video_stream_active = True
+            if not self.display_power_desired:
+                self.display_power_check.configure(state="normal")
+        except Exception as error:
+            self._log(f"Could not display phone screen: {error}")
+
+    def _open_video_fullscreen(self, _event=None):
+        if self.capture_action is not None:
+            return None
+        if not self.video_stream_active:
+            return "break"
+        if self.fullscreen_video_window is not None:
+            try:
+                self.fullscreen_video_window.focus_force()
+                return "break"
+            except tk.TclError:
+                self.fullscreen_video_window = None
+        window = tk.Toplevel(self.root)
+        window.title("Phone screen")
+        window.configure(background=self.colors["window"])
+        window.attributes("-fullscreen", True)
+        self.fullscreen_video_window = window
+        self.fullscreen_video_photo = None
+        label = tk.Label(window, anchor="center", background=self.colors["window"])
+        label.pack(fill="both", expand=True)
+        self.fullscreen_video_label = label
+        label.bind("<ButtonPress-1>", self._on_video_mouse_press)
+        label.bind("<B1-Motion>", self._on_video_mouse_motion)
+        label.bind("<ButtonRelease-1>", self._on_video_mouse_release)
+        window.bind("<Escape>", self._close_video_fullscreen)
+        window.bind("<KeyPress-f>", self._close_video_fullscreen)
+        window.bind("<KeyPress-F>", self._close_video_fullscreen)
+        window.protocol("WM_DELETE_WINDOW", self._close_video_fullscreen)
+        window.update_idletasks()
+        if self.latest_video_jpeg is not None:
+            self._show_video_frame(self.latest_video_jpeg)
+        window.focus_force()
+        return "break"
+
+    def _close_video_fullscreen(self, _event=None):
+        window = self.fullscreen_video_window
+        self.fullscreen_video_window = None
+        self.fullscreen_video_label = None
+        self.fullscreen_video_photo = None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _video_mouse_point(self, event):
+        photo = (
+            self.fullscreen_video_photo
+            if event.widget is self.fullscreen_video_label
+            else self.video_photo
+        )
+        if photo is None:
+            return None
+        image_width = photo.width()
+        image_height = photo.height()
+        label_width = event.widget.winfo_width()
+        label_height = event.widget.winfo_height()
+        left = (label_width - image_width) / 2
+        top = (label_height - image_height) / 2
+        x = (event.x - left) / max(1, image_width)
+        y = (event.y - top) / max(1, image_height)
+        if not 0 <= x <= 1 or not 0 <= y <= 1:
+            return None
+        return float(x), float(y)
+
+    def _on_video_mouse_press(self, event):
+        if not self.remote_control_var.get():
+            return
+        point = self._video_mouse_point(event)
+        if point is None:
+            return
+        self.video_gesture_points = [point]
+        self.video_gesture_started_at = time.monotonic()
+
+    def _on_video_mouse_motion(self, event):
+        if not self.remote_control_var.get() or not self.video_gesture_points:
+            return
+        point = self._video_mouse_point(event)
+        if point is None or len(self.video_gesture_points) >= 64:
+            return
+        previous = self.video_gesture_points[-1]
+        if abs(point[0] - previous[0]) + abs(point[1] - previous[1]) >= 0.004:
+            self.video_gesture_points.append(point)
+
+    def _on_video_mouse_release(self, event):
+        points = self.video_gesture_points
+        self.video_gesture_points = None
+        if not self.remote_control_var.get() or not points:
+            return
+        point = self._video_mouse_point(event)
+        if point is not None and len(points) < 64:
+            points.append(point)
+        elapsed_ms = round((time.monotonic() - self.video_gesture_started_at) * 1000)
+        if len(points) == 1:
+            points.append(points[0])
+        self._send_remote_gesture(points, max(100, elapsed_ms))
+
+    def _on_remote_control_toggle(self):
+        if self.remote_control_var.get():
+            self._log("Mouse control is enabled for this connection. Click or drag on the Video stream image.")
+        else:
+            self.video_gesture_points = None
+            self._log("Mouse control is disabled.")
+
+    def _check_for_updates(self):
+        self.update_button.configure(state="disabled", text="Checking…")
+        threading.Thread(
+            target=self._check_for_updates_worker,
+            name="PhoneToPCUpdateCheck",
+            daemon=True,
+        ).start()
+
+    def _check_for_updates_worker(self):
+        try:
+            request = urllib.request.Request(
+                LATEST_RELEASE_API,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": f"PhoneToPC/{APP_VERSION}",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                release = json.loads(response.read().decode("utf-8"))
+            latest_version = release.get("tag_name", "").strip()
+            release_url = release.get("html_url", "https://github.com/shihab1712/PhoneToPC/releases/latest")
+            if not latest_version or not _version_tuple(latest_version):
+                raise ValueError("The latest GitHub release does not have a valid version tag.")
+            status = "available" if _version_tuple(latest_version) > _version_tuple(APP_VERSION) else "current"
+            self.events.put(("update_check_result", (status, latest_version, release_url, None)))
+        except Exception as error:
+            self.events.put(("update_check_result", ("error", None, None, str(error))))
+
+    def _on_phone_mute_toggle(self):
+        muted = self.phone_mute_var.get()
+        if self.client is None:
+            self._log(
+                "Phone media will be muted when a phone connects."
+                if muted else "Phone media mute is off."
+            )
+            return
+        self._send_phone_mute(muted)
+
+    def _send_phone_mute(self, muted):
+        with self.connection_lock:
+            websocket = self.active_websocket
+        loop = self.loop
+        if websocket is None or loop is None or not loop.is_running():
+            self._log("Phone media mute will apply when a phone connects.")
+            return
+        command = f"PHONE_MUTE:{1 if muted else 0}"
+        future = asyncio.run_coroutine_threadsafe(websocket.send(command), loop)
+
+        def report_error(result):
+            try:
+                result.result()
+            except Exception as error:
+                self.events.put(("control_error", f"Could not change phone media volume: {error}"))
+
+        future.add_done_callback(report_error)
+        self._log("Mute requested on phone." if muted else "Phone media restore requested.")
+
+    def _on_display_power_toggle(self):
+        self._set_phone_display_power(self.display_power_var.get())
+
+    def _set_phone_display_power(self, turn_off):
+        desired = bool(turn_off)
+        self.display_power_desired = desired
+        self.display_power_check.configure(state="disabled")
+        threading.Thread(
+            target=self._display_power_worker,
+            args=(desired,),
+            name="PhoneDisplayPower",
+            daemon=True,
+        ).start()
+
+    def _display_power_worker(self, turn_off):
+        error_text = None
+        try:
+            with self.display_power_lock:
+                adb = self._find_adb()
+                devices = subprocess.run(
+                    [adb, "devices"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    check=False,
+                )
+                serials = [
+                    fields[0]
+                    for line in devices.stdout.splitlines()
+                    if len(fields := line.split()) >= 2 and fields[1] == "device"
+                ]
+                if len(serials) != 1:
+                    raise RuntimeError(
+                        "Connect exactly one Android phone over USB, unlock it, and approve USB debugging."
+                    )
+                serial = serials[0]
+                size_result = subprocess.run(
+                    [adb, "-s", serial, "shell", "wm", "size"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    check=False,
+                )
+                screen_size = None
+                for line in size_result.stdout.splitlines():
+                    size_text = line.rsplit(":", 1)[-1].strip()
+                    if "x" in size_text:
+                        try:
+                            width_text, height_text = size_text.split("x", 1)
+                            screen_size = (int(width_text), int(height_text))
+                        except ValueError:
+                            continue
+                if size_result.returncode != 0 or screen_size is None:
+                    raise RuntimeError("Could not read the phone screen dimensions for mouse control.")
+                sdk = subprocess.run(
+                    [adb, "-s", serial, "shell", "getprop", "ro.build.version.sdk"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    check=False,
+                )
+                if sdk.returncode != 0 or int(sdk.stdout.strip() or "0") < 35:
+                    raise RuntimeError("Turning the display off while mirroring requires Android 15 or newer.")
+                command = "power-off" if turn_off else "power-reset"
+                result = subprocess.run(
+                    [adb, "-s", serial, "shell", "cmd", "display", command, "0"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    check=False,
+                )
+                if result.returncode != 0:
+                    details = result.stderr.strip() or result.stdout.strip()
+                    raise RuntimeError(details or f"Android display command failed: {command}")
+                self.display_power_serial = serial
+                self.phone_screen_size = screen_size
+        except Exception as error:
+            error_text = str(error)
+        self.events.put(("display_power_result", (turn_off, error_text)))
+
+    def _restore_phone_display(self):
+        if not self.phone_display_off and not self.display_power_desired:
+            return
+        self.display_power_var.set(False)
+        self._set_phone_display_power(False)
+
+    def _send_remote_gesture(self, points, duration_ms):
+        if not self.remote_control_var.get():
+            return
+        if self.phone_display_off:
+            self._send_adb_gesture(points, duration_ms)
+            return
+        with self.connection_lock:
+            websocket = self.active_websocket
+        loop = self.loop
+        if websocket is None or loop is None or not loop.is_running():
+            self._log("Connect the phone and start screen sharing before using mouse control.")
+            return
+        command = "CONTROL:" + json.dumps(
+            {"type": "gesture", "points": points, "durationMs": duration_ms},
+            separators=(",", ":"),
+        )
+        future = asyncio.run_coroutine_threadsafe(websocket.send(command), loop)
+
+        def report_error(result):
+            try:
+                result.result()
+            except Exception as error:
+                self.events.put(("control_error", f"Could not send mouse gesture: {error}"))
+
+        future.add_done_callback(report_error)
+
+    def _send_adb_gesture(self, points, duration_ms):
+        serial = self.display_power_serial
+        screen_size = self.phone_screen_size
+        frame_size = self.video_source_size
+        if not serial or not screen_size or not frame_size:
+            self._log("Mouse control while the phone display is off needs an authorized USB debugging connection.")
+            return
+        screen_width, screen_height = screen_size
+        frame_width, frame_height = frame_size
+        if (frame_width > frame_height) != (screen_width > screen_height):
+            screen_width, screen_height = screen_height, screen_width
+        coords = [
+            (
+                max(0, min(screen_width - 1, round(x * (screen_width - 1)))),
+                max(0, min(screen_height - 1, round(y * (screen_height - 1)))),
+            )
+            for x, y in points
+        ]
+        first, last = coords[0], coords[-1]
+        adb = self.adb_path
+        if not adb:
+            try:
+                adb = self._find_adb()
+            except Exception as error:
+                self._log(f"Mouse control while display is off failed: {error}")
+                return
+        if len(coords) < 2 or first == last:
+            command = [
+                adb, "-s", serial, "shell", "input", "-d", "0", "tap",
+                str(first[0]), str(first[1]),
+            ]
+        else:
+            command = [
+                adb, "-s", serial, "shell", "input", "-d", "0", "swipe",
+                str(first[0]), str(first[1]), str(last[0]), str(last[1]),
+                str(max(50, min(2000, duration_ms))),
+            ]
+        threading.Thread(
+            target=self._run_adb_gesture,
+            args=(command,),
+            name="PhoneMouseGesture",
+            daemon=True,
+        ).start()
+
+    def _run_adb_gesture(self, command):
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+            details = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part)
+            if result.returncode != 0 or "error" in details.lower() or "exception" in details.lower():
+                details = details or "ADB input command failed."
+                self.events.put(("control_error", f"Phone mouse input failed: {details}"))
+        except Exception as error:
+            self.events.put(("control_error", f"Phone mouse input failed: {error}"))
+
     def _log(self, message):
         if not hasattr(self, "log_text"):
             return
@@ -1321,6 +1959,7 @@ class ReceiverApp:
         self.log_text.configure(state="disabled")
 
     def _on_close(self):
+        self._restore_phone_display()
         self._stop_hotkey_listener()
         if self.worker is not None and self.worker.is_alive():
             self.closing = True

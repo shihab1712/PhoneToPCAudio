@@ -3,6 +3,7 @@ package com.example.phonetopc
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -12,6 +13,7 @@ class MainActivity : FlutterActivity() {
     private val requestCode = 4301
     private val audioPermissionRequest = 4302
     private var pending: MethodChannel.Result? = null
+    private var pendingIncludeVideo = false
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "phonetopc/capture").setMethodCallHandler { call, result ->
@@ -28,9 +30,43 @@ class MainActivity : FlutterActivity() {
                 "startCapture" -> {
                     if (pending != null) { result.error("BUSY", "Capture request already active", null); return@setMethodCallHandler }
                     pending = result
+                    pendingIncludeVideo = call.argument<Boolean>("includeVideo") ?: false
+                    val quality = call.argument<String>("videoQuality") ?: "balanced"
+                    val frameRate = call.argument<String>("videoFrameRate") ?: "30"
+                    val (maxWidth, jpegQuality) = when (quality) {
+                        "low" -> 480 to 45
+                        "high" -> 960 to 55
+                        else -> 720 to 48
+                    }
+                    val intervalMs = if (frameRate == "60") 16 else 33
+                    getPreferences(MODE_PRIVATE).edit()
+                        .putInt("video_max_width", maxWidth)
+                        .putInt("video_interval_ms", intervalMs)
+                        .putInt("video_jpeg_quality", jpegQuality)
+                        .apply()
                     if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), audioPermissionRequest)
                     } else requestCaptureConsent()
+                }
+                "setPhoneMuted" -> {
+                    val muted = call.argument<Boolean>("muted") ?: false
+                    result.success(CaptureService.setPhoneMediaMuted(muted))
+                }
+                "openMouseControlSettings" -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    result.success(null)
+                }
+                "dispatchMouseGesture" -> {
+                    val rawPoints = call.argument<List<Any>>("points").orEmpty()
+                    val points = rawPoints.mapNotNull { raw ->
+                        val pair = raw as? List<*> ?: return@mapNotNull null
+                        val x = pair.getOrNull(0) as? Number ?: return@mapNotNull null
+                        val y = pair.getOrNull(1) as? Number ?: return@mapNotNull null
+                        x.toFloat() to y.toFloat()
+                    }
+                    val duration = call.argument<Int>("durationMs") ?: 120
+                    val service = RemoteControlAccessibilityService.activeService
+                    result.success(service?.dispatchNormalizedGesture(points, duration) == true)
                 }
                 "stopCapture" -> { stopService(Intent(this, CaptureService::class.java)); result.success(null) }
                 else -> result.notImplemented()
@@ -96,7 +132,15 @@ class MainActivity : FlutterActivity() {
         val callback = pending ?: return
         pending = null
         if (resultCode != Activity.RESULT_OK || data == null) { callback.error("DENIED", "Playback capture permission was not granted", null); return }
-        startForegroundService(Intent(this, CaptureService::class.java).putExtra("resultCode", resultCode).putExtra("projectionData", data))
+        startForegroundService(
+            Intent(this, CaptureService::class.java)
+                .putExtra("resultCode", resultCode)
+                .putExtra("projectionData", data)
+                .putExtra("includeVideo", pendingIncludeVideo)
+                .putExtra("videoMaxWidth", getPreferences(MODE_PRIVATE).getInt("video_max_width", 720))
+                .putExtra("videoIntervalMs", getPreferences(MODE_PRIVATE).getInt("video_interval_ms", 33))
+                .putExtra("videoJpegQuality", getPreferences(MODE_PRIVATE).getInt("video_jpeg_quality", 48)),
+        )
         callback.success(null)
     }
 }

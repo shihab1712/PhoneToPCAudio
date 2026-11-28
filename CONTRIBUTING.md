@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Phone-to-PC Audio. Bug reports, documentation fixes, and code contributions are welcome.
+Thanks for helping improve PhoneToPC. Bug reports, documentation fixes, and code contributions are welcome.
 
 ## Before opening a change
 

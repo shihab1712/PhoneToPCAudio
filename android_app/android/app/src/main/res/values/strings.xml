@@ -1,0 +1,3 @@
+<resources>
+    <string name="mouse_control_description">Allow PhoneToPC to send mouse taps and swipes while a stream is connected.</string>
+</resources>

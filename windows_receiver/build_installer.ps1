@@ -1,9 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
-$portableAppFolder = 'dist\PhoneToPcReceiver'
-$portableApp = Join-Path $projectRoot "$portableAppFolder\PhoneToPcReceiver.exe"
+$portableAppFolder = 'dist\PhoneToPC'
+$portableApp = Join-Path $projectRoot "$portableAppFolder\PhoneToPC.exe"
 $installerScript = Join-Path $projectRoot 'PhoneToPcAudio.iss'
-$outputInstaller = Join-Path $projectRoot 'dist\installer\PhoneToPcAudio-Setup-1.0.0.exe'
+$outputInstaller = Join-Path $projectRoot 'dist\installer\PhoneToPC-Setup-1.1.0.exe'
 $tempPath = Join-Path $projectRoot '.tmp-installer'
 
 if (-not (Test-Path -LiteralPath $portableApp)) {
@@ -39,7 +39,7 @@ New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
 $env:TEMP = $tempPath
 $env:TMP = $tempPath
 try {
-    & $compiler '/Qp' "/DAppFilesDir=$portableAppFolder" $installerScript
+    & $compiler '/Qp' '/DAppVersion=1.1.0' "/DAppFilesDir=$portableAppFolder" $installerScript
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup exited with code $LASTEXITCODE"
     }

@@ -13,6 +13,8 @@ RATE = 48_000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
 FRAME_BYTES = 1_920  # 10 ms at 48 kHz, stereo, signed 16-bit PCM
+VIDEO_PREFIX = b"PTP1V"
+AUDIO_PREFIX = b"PTP1A"
 
 
 class VolumeControl:
@@ -158,6 +160,7 @@ async def receive_audio(
         return
 
     peer = websocket.remote_address
+    emit("websocket", websocket)
     emit("connected", peer)
     if output_device_control is not None:
         output_device, output_revision = output_device_control.snapshot()
@@ -183,8 +186,21 @@ async def receive_audio(
                                 if device_name:
                                     emit("device_name", device_name)
                                 continue
+                            if isinstance(message, str) and message.startswith("CONTROL_ERROR:"):
+                                emit("control_error", message.removeprefix("CONTROL_ERROR:").strip())
+                                continue
+                            if isinstance(message, str) and message.startswith("PHONE_MUTE_RESULT:"):
+                                emit("phone_mute_result", message.removeprefix("PHONE_MUTE_RESULT:").strip())
+                                continue
                             emit("warning", "Ignored a non-binary message")
                             continue
+                        if message.startswith(VIDEO_PREFIX):
+                            jpeg = message[len(VIDEO_PREFIX):]
+                            if jpeg:
+                                emit("video_frame", jpeg)
+                            continue
+                        if message.startswith(AUDIO_PREFIX):
+                            message = message[len(AUDIO_PREFIX):]
                         if len(message) % (CHANNELS * SAMPLE_WIDTH):
                             emit("warning", f"Ignored malformed PCM packet ({len(message)} bytes)")
                             continue

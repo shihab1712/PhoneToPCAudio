@@ -16,7 +16,7 @@ The portable app is generated under `windows_receiver\dist\PhoneToPC\`. The buil
 
 The global shortcuts default to **Ctrl+Alt+Up** (volume up), **Ctrl+Alt+Down** (volume down), and **Ctrl+Alt+M** (mute/unmute); use **Change** in the app to customize them. They work while the app is minimized, change volume in 5% steps, and are saved for the next launch. If another program already uses a shortcut, choose a different combination. If Windows Firewall asks, allow access on the **Private network** used by the phone. Do not expose port `8765` to public networks.
 
-To create a standard Windows installer, install Inno Setup 6, build the portable app, then run `windows_receiver\build_installer.ps1`. The setup program is written to `windows_receiver\dist\installer\PhoneToPC-Setup-1.1.0.exe`. It installs per-user, creates a Start menu shortcut and offers an optional desktop shortcut. It does not add firewall rules; allow the app on the Private network if Windows asks.
+To create a standard Windows installer, install Inno Setup 6, build the portable app, then run `windows_receiver\build_installer.ps1`. The setup program is written to `windows_receiver\dist\installer\PhoneToPC-Setup-1.1.1.exe`. It installs per-user, creates a Start menu shortcut and offers an optional desktop shortcut. It does not add firewall rules; allow the app on the Private network if Windows asks.
 
 To run the desktop app directly from Python instead of packaging it, run `python receiver_app.py`. To use the command-line receiver, run `python receiver.py`; it plays through the system-default output. Both versions use the same PCM/WebSocket receive code.
 

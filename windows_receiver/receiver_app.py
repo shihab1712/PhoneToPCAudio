@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -25,8 +26,8 @@ from websockets.asyncio.server import serve
 from audio_receiver import AudioBufferControl, FRAME_BYTES, OutputDeviceControl, VolumeControl, receive_audio
 
 
-APP_VERSION = "1.1.0"
-LATEST_RELEASE_API = "https://api.github.com/repos/shihab1712/PhoneToPC/releases/latest"
+APP_VERSION = "1.1.1"
+LATEST_RELEASE_PAGE = "https://github.com/shihab1712/PhoneToPC/releases/latest"
 
 
 def _version_tuple(value):
@@ -1727,18 +1728,25 @@ class ReceiverApp:
     def _check_for_updates_worker(self):
         try:
             request = urllib.request.Request(
-                LATEST_RELEASE_API,
+                LATEST_RELEASE_PAGE,
                 headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": f"PhoneToPC/{APP_VERSION}",
+                    "Accept": "text/html",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhoneToPCUpdate/" + APP_VERSION,
                 },
             )
-            with urllib.request.urlopen(request, timeout=8) as response:
-                release = json.loads(response.read().decode("utf-8"))
-            latest_version = release.get("tag_name", "").strip()
-            release_url = release.get("html_url", "https://github.com/shihab1712/PhoneToPC/releases/latest")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                release_url = response.geturl()
+                page = response.read(256 * 1024).decode("utf-8", errors="replace")
+            match = re.search(r'/releases/tag/([^/?#"\s]+)', release_url)
+            if not match:
+                match = re.search(r'/releases/tag/([^/?#"\s]+)', page)
+            latest_version = urllib.parse.unquote(match.group(1)) if match else ""
             if not latest_version or not _version_tuple(latest_version):
-                raise ValueError("The latest GitHub release does not have a valid version tag.")
+                raise ValueError("GitHub’s latest-release page did not contain a valid version tag.")
+            release_url = (
+                "https://github.com/shihab1712/PhoneToPC/releases/tag/"
+                + urllib.parse.quote(latest_version, safe="")
+            )
             status = "available" if _version_tuple(latest_version) > _version_tuple(APP_VERSION) else "current"
             self.events.put(("update_check_result", (status, latest_version, release_url, None)))
         except Exception as error:

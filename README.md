@@ -6,8 +6,8 @@ Stream eligible Android audio to a Windows PC over Wi-Fi or USB. Choose **Audio 
 
 Download the files from the [latest GitHub release](https://github.com/shihab1712/PhoneToPC/releases/latest). Under **Assets**, choose:
 
-- **Windows installer** (`PhoneToPC-Setup-1.1.0.exe`) — installs the receiver for the current Windows user.
-- **Android app** (`PhoneToPC-1.1.0.apk`) — install this on your phone. This APK is for direct installation, not the Google Play Store.
+- **Windows installer** (`PhoneToPC-Setup-1.1.1.exe`) — installs the receiver for the current Windows user.
+- **Android app** (`PhoneToPC-1.1.1.apk`) — install this on your phone. This APK is for direct installation, not the Google Play Store.
 
 ## Install
 
